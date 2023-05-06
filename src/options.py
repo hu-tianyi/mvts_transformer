@@ -163,9 +163,12 @@ class Options(object):
         self.parser.add_argument('--normalization_layer', choices={'BatchNorm', 'LayerNorm'}, default='BatchNorm',
                                  help='Normalization layer to be used internally in transformer encoder')
 
-    def parse(self):
+    def parse(self, text=None):
 
-        args = self.parser.parse_args()
+        if text is None:
+            args = self.parser.parse_args()
+        else:
+            args = self.parser.parse_args(text)
 
         args.lr_step = [int(i) for i in args.lr_step.split(',')]
         args.lr_factor = [float(i) for i in args.lr_factor.split(',')]
