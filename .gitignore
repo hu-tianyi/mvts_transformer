@@ -16,7 +16,7 @@ build
 *.pyc
 
 # Jupyter
-*.ipynb
+#*.ipynb
 .ipynb_checkpoints
 
 # Doc
@@ -30,3 +30,9 @@ _build
 logs
 
 .idea
+
+# Dataset
+data/
+
+# Experiment Results
+experiments/
