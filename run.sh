@@ -1,0 +1,1 @@
+python src/main.py --output_dir ./experiments/ --comment "regression from Scratch" --name pm25_fromScratch_Regression --records_file Regression_records.xls --data_dir data/regression/BeijingPM25Quality/ --data_class tsra --pattern TRAIN --val_pattern TEST --epochs 100 --lr 0.001 --optimizer RAdam  --pos_encoding learnable --task regression
