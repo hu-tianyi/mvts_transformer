@@ -36,3 +36,6 @@ data/
 
 # Experiment Results
 experiments/
+
+# Record Files
+*.xls
