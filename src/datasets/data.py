@@ -13,6 +13,8 @@ from sktime.utils import load_data
 
 from datasets import utils
 
+from functools import partial
+
 logger = logging.getLogger('__main__')
 
 
@@ -441,8 +443,178 @@ class PMUData(BaseData):
         """
         df = pd.read_csv(filepath)
         return df
+    
+
+class PoseErrorData(BaseData):
+    """
+    Dataset class for Machine dataset.
+    Attributes:
+        all_df: dataframe indexed by ID, with multiple rows corresponding to the same index (sample).
+            Each row is a time step; Each column contains either metadata (e.g. timestamp) or a feature.
+        feature_df: contains the subset of columns of `all_df` which correspond to selected features
+        feature_names: names of columns contained in `feature_df` (same as feature_df.columns)
+        all_IDs: IDs contained in `all_df`/`feature_df` (same as all_df.index.unique() )
+        max_seq_len: maximum sequence (time series) length. If None, script argument `max_seq_len` will be used.
+            (Moreover, script argument overrides this attribute)
+    """
+
+    def __init__(self, root_dir, file_list=None, pattern=None, n_proc=1, limit_size=None, config=None):
+
+        self.set_num_processes(n_proc=n_proc)
+        self.window_length = 48
+
+        # Modify the function load_all
+        #self.all_df = self.load_all(root_dir, file_list=file_list, pattern=pattern)
+        result = self.load_all(root_dir, file_list=file_list, pattern=pattern)
+        feature_df_list, label_df_list, sequence_list = zip(*result)
+        #print(feature_df_list)
+        #print(label_df_list)
+        #print(sequence_list)
+        self.all_df = pd.concat(feature_df_list, axis=0, ignore_index=True)
+        self.all_label_df = pd.concat(label_df_list, axis=0, ignore_index=True)
+
+        self.all_df = self.all_df.sort_values(by=['start_image_index'], kind='mergesort')  # datasets is presorted
+        self.all_df = self.all_df.set_index('start_image_index')
+
+        self.all_label_df = self.all_label_df.sort_values(by=['start_image_index'], kind='mergesort')
+        self.all_label_df = self.all_label_df.set_index('start_image_index')
+
+        self.all_IDs = self.all_df.index.unique()  # all sample (session) IDs
+        
+        
+        self.max_seq_len = self.window_length
+        if limit_size is not None:
+            if limit_size > 1:
+                limit_size = int(limit_size)
+            else:  # interpret as proportion if in (0, 1]
+                limit_size = int(limit_size * len(self.all_IDs))
+            self.all_IDs = self.all_IDs[:limit_size]
+            self.all_df = self.all_df.loc[self.all_IDs]
+        
+        
+        self.feature_names = ['brightness','entropy', 'num_images', 'min_corners', 'min_keypoints',\
+                              'max_keypoints_diff', 'min_keypoint_dist','min_inliers',\
+                              'localba_error', 'localba_visual_error', 'localba_inertial_error',\
+                              'acc_magnitude']
+        self.label_name = 'error'
+        self.feature_df = self.all_df[self.feature_names]
+        self.labels_df = self.all_label_df
+
+        self.feature_df.index.rename('index', inplace=True)
+        self.labels_df.index.rename('index', inplace=True)
+
+        self.feature_df = self.feature_df.astype('float32')
+        self.labels_df = self.labels_df.astype('float32')
+
+    
+
+    def load_all(self, root_dir, file_list=None, pattern=None):
+        """
+        Loads datasets from csv files contained in `root_dir` into a dataframe, optionally choosing from `pattern`
+        Args:
+            root_dir: directory containing all individual .csv files
+            file_list: optionally, provide a list of file paths within `root_dir` to consider.
+                Otherwise, entire `root_dir` contents will be used.
+            pattern: optionally, apply regex string to select subset of files
+        Returns:
+            all_df: a single (possibly concatenated) dataframe with all data corresponding to specified files
+        """
+        # each file name corresponds to another date. Also tools (A, B) and others.
+
+        # Select paths for training and evaluation
+        if file_list is None:
+            data_paths = glob.glob(os.path.join(root_dir, '*'))  # list of all paths
+        else:
+            data_paths = [os.path.join(root_dir, p) for p in file_list]
+        if len(data_paths) == 0:
+            raise Exception('No files found using: {}'.format(os.path.join(root_dir, '*')))
+
+        if pattern is None:
+            # by default evaluate on
+            selected_paths = data_paths
+        else:
+            selected_paths = list(filter(lambda x: re.search(pattern, x), data_paths))
+
+        input_paths = [p for p in selected_paths if os.path.isfile(p) and p.endswith('.csv')]
+        if len(input_paths) == 0:
+            raise Exception("No .csv files found using pattern: '{}'".format(pattern))
+
+        if self.n_proc > 1:
+            # Load in parallel
+            _n_proc = min(self.n_proc, len(input_paths))  # no more than file_names needed here
+            logger.info("Loading {} datasets files using {} parallel processes ...".format(len(input_paths), _n_proc))
+            with Pool(processes=_n_proc) as pool:
+                result = pool.map(partial(PoseErrorData.load_single, 
+                                                    window_length= self.window_length
+                                                    ),
+                                            input_paths)
+        else:  # read 1 file at a time
+            result = [PoseErrorData.load_single(path) for path in input_paths]
+
+        return result
+
+    @staticmethod
+    def load_single(filepath, window_length):
+        df = PoseErrorData.read_data(filepath)
+        sequence_name = filepath.split('/')[-1].split('.')[-2]
+        
+        df = PoseErrorData.select_columns(df)
+
+        rolling_window = 96
+        label_df = df.loc[:, 'error'].copy().reset_index(drop=True).rolling(rolling_window).mean()
+        label_df.loc[:rolling_window] = df.loc[:rolling_window, 'error']
+        label_df = label_df.loc[window_length:].copy().reset_index(drop=True)
+        
+        num_nan = df.isna().sum().sum()
+        if num_nan > 0:
+            logger.warning("{} nan values in {} will be replaced by 0".format(num_nan, filepath))
+            df = df.fillna(0)
+
+        # implement the sliding window here
+        window_number = 0
+        slide_df = df.iloc[0:window_length].copy().drop('error', axis=1)
+        slide_df = slide_df.assign(start_image_index = window_number)
+        for idx in range(window_length+1, len(df)):
+            window_number +=1
+            window_df = df.iloc[idx-window_length:idx].copy().drop('error', axis=1)
+            window_df = window_df.assign(start_image_index = window_number)
+            slide_df = pd.concat([slide_df, window_df], axis=0, ignore_index=True)
+        slide_df = PoseErrorData.modify_sequence_index(slide_df, sequence_name)
+
+        index = slide_df['start_image_index'].unique()
+        label_df = label_df.to_frame(name='error')
+        label_df['start_image_index'] = index
+        return [slide_df, label_df, sequence_name]
+
+    @staticmethod
+    def read_data(filepath):
+        """Reads a single .csv, which typically contains a day of datasets of various machine sessions.
+        """
+        df = pd.read_csv(filepath)
+        return df
+    
+    @staticmethod
+    def modify_sequence_index(df, squence_name):
+        sequence_num = int(squence_name.split('_')[-2][-1])
+        run_num = int(squence_name.split('_')[-1])
+        base_num = 1*10**11 + sequence_num*10**8 + run_num*10**5
+        df.loc[:, 'start_image_index'] += base_num
+        return df
+
+    @staticmethod
+    def select_columns(df):
+        df['start_image_index'] = df['start_image_index'].astype(int)
+        keep_cols = ['start_image_index', 'error',\
+                     'brightness','entropy', 'num_images', 'min_corners', 'min_keypoints',\
+                     'max_keypoints_diff', 'min_keypoint_dist','min_inliers',\
+                     'localba_error', 'localba_visual_error', 'localba_inertial_error',\
+                     'acc_magnitude']
+        df = df[keep_cols]
+
+        return df
 
 
 data_factory = {'weld': WeldData,
                 'tsra': TSRegressionArchive,
-                'pmu': PMUData}
+                'pmu': PMUData,
+                'pose': PoseErrorData}
