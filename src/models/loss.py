@@ -14,7 +14,9 @@ def get_loss_module(config):
         return NoFussCrossEntropyLoss(reduction='none')  # outputs loss for each batch sample
 
     if task == "regression":
-        return nn.MSELoss(reduction='none')  # outputs loss for each batch sample
+        #return nn.MSELoss(reduction='none')  # outputs loss for each batch sample
+        #return MAPELoss(reduction='none', epsilon=0.01)  # outputs loss for each batch sample
+        return MSEMAPELoss(reduction='none', epsilon=0.01, alpha=1000)
 
     else:
         raise ValueError("Loss module for task '{}' does not exist".format(task))
@@ -72,3 +74,86 @@ class MaskedMSELoss(nn.Module):
         masked_true = torch.masked_select(y_true, mask)
 
         return self.mse_loss(masked_pred, masked_true)
+
+
+
+# Reference:
+# https://github.com/Lightning-AI/torchmetrics/blob/master/src/torchmetrics/functional/regression/mape.py
+
+class MAPELoss(nn.Module):
+    """ Mean Absolute Percentage Error Loss
+    """
+    def __init__(self, reduction: str = 'mean', epsilon: float = 0.001):
+        super().__init__()
+        self.reduction = reduction
+        self.epsilon = epsilon
+
+    def forward(self,
+                y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+        """Compute the loss between a target value and a prediction.
+
+        Args:
+            y_pred: Estimated values
+            y_true: Target values
+
+        Returns
+        -------
+        if reduction == 'none':
+            (num_active,) Loss for each active batch element as a tensor with gradient attached.
+        if reduction == 'mean':
+            scalar mean loss over batch as a tensor with gradient attached.
+        """
+
+        abs_diff = torch.abs(y_pred - y_true)
+        abs_per_error = abs_diff / torch.clamp(torch.abs(y_true), min=self.epsilon)
+
+        if self.reduction == 'none':
+            return abs_per_error
+        elif self.reduction == 'mean':
+            sum_abs_per_error = torch.sum(abs_per_error)
+            num_obs = y_true.numel()
+            return sum_abs_per_error / num_obs
+
+
+
+class MSEMAPELoss(nn.Module):
+    """ Mean Absolute Percentage Error Loss
+    """
+    def __init__(self, reduction: str = 'mean', epsilon: float = 0.001, alpha = 1000):
+        super().__init__()
+        self.reduction = reduction
+        self.epsilon = epsilon
+        self.alpha = alpha
+
+    def forward(self,
+                y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+        """Compute the loss between a target value and a prediction.
+
+        Args:
+            y_pred: Estimated values
+            y_true: Target values
+
+        Returns
+        -------
+        if reduction == 'none':
+            (num_active,) Loss for each active batch element as a tensor with gradient attached.
+        if reduction == 'mean':
+            scalar mean loss over batch as a tensor with gradient attached.
+        """
+
+        diff = y_pred - y_true
+        abs_diff = torch.abs(diff)
+
+        # absolute percentage error (calculated for each single element in minibatch)
+        abs_per_error = abs_diff / torch.clamp(torch.abs(y_true), min=self.epsilon)
+
+        # squre error
+        square_error = torch.square(abs_diff)
+
+        if self.reduction == 'none':
+            return abs_per_error + self.alpha * square_error
+        elif self.reduction == 'mean':
+            sum_abs_per_error = torch.sum(abs_per_error)
+            sum_square_error = torch.sum(square_error)
+            num_obs = y_true.numel()
+            return (sum_abs_per_error+self.alpha*sum_square_error) / num_obs
