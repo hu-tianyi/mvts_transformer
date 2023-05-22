@@ -560,7 +560,11 @@ class PoseErrorData(BaseData):
         
         df = PoseErrorData.select_columns(df)
 
-        rolling_window = 96
+        # without rolling window smoothing
+        #label_df = df.loc[window_length:, 'error'].copy().reset_index(drop=True)
+        
+        # with rolling window smoothing
+        rolling_window = 24
         label_df = df.loc[:, 'error'].copy().reset_index(drop=True).rolling(rolling_window).mean()
         label_df.loc[:rolling_window] = df.loc[:rolling_window, 'error']
         label_df = label_df.loc[window_length:].copy().reset_index(drop=True)
