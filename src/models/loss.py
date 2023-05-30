@@ -14,9 +14,9 @@ def get_loss_module(config):
         return NoFussCrossEntropyLoss(reduction='none')  # outputs loss for each batch sample
 
     if task == "regression":
-        #return nn.MSELoss(reduction='none')  # outputs loss for each batch sample
+        return nn.MSELoss(reduction='none')  # outputs loss for each batch sample
         #return MAPELoss(reduction='none', epsilon=0.01)  # outputs loss for each batch sample
-        return MSEMAPELoss(reduction='none', epsilon=0.01, alpha=1000)
+        #return MSEMAPELoss(reduction='none', epsilon=0.01, alpha=1000)
 
     else:
         raise ValueError("Loss module for task '{}' does not exist".format(task))
