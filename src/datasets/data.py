@@ -461,7 +461,8 @@ class PoseErrorData(BaseData):
     def __init__(self, root_dir, file_list=None, pattern=None, n_proc=1, limit_size=None, config=None):
 
         self.set_num_processes(n_proc=n_proc)
-        self.window_length = 48
+        self.window_length = 60
+        self.rolling_window = 30
 
         # Modify the function load_all
         #self.all_df = self.load_all(root_dir, file_list=file_list, pattern=pattern)
@@ -495,7 +496,9 @@ class PoseErrorData(BaseData):
         self.feature_names = ['brightness','entropy', 'num_images', 'min_corners', 'min_keypoints',\
                               'max_keypoints_diff', 'min_keypoint_dist','min_inliers',\
                               'localba_error', 'localba_visual_error', 'localba_inertial_error',\
-                              'acc_magnitude']
+                              'acc_magnitude', 'gyro_magnitude']
+        # self.feature_names = ['brightness','entropy', 'num_images', 'min_corners',\
+        #                       'acc_magnitude', 'gyro_magnitude']
         self.label_name = 'error'
         self.feature_df = self.all_df[self.feature_names]
         self.labels_df = self.all_label_df
@@ -506,7 +509,6 @@ class PoseErrorData(BaseData):
         self.feature_df = self.feature_df.astype('float32')
         self.labels_df = self.labels_df.astype('float32')
 
-    
 
     def load_all(self, root_dir, file_list=None, pattern=None):
         """
@@ -545,7 +547,8 @@ class PoseErrorData(BaseData):
             logger.info("Loading {} datasets files using {} parallel processes ...".format(len(input_paths), _n_proc))
             with Pool(processes=_n_proc) as pool:
                 result = pool.map(partial(PoseErrorData.load_single, 
-                                                    window_length= self.window_length
+                                                    window_length=self.window_length,
+                                                    rolling_window=self.rolling_window
                                                     ),
                                             input_paths)
         else:  # read 1 file at a time
@@ -554,17 +557,16 @@ class PoseErrorData(BaseData):
         return result
 
     @staticmethod
-    def load_single(filepath, window_length):
+    def load_single(filepath, window_length, rolling_window):
         df = PoseErrorData.read_data(filepath)
         sequence_name = filepath.split('/')[-1].split('.')[-2]
         
         df = PoseErrorData.select_columns(df)
 
-        # without rolling window smoothing
+        # Option 1: without rolling window smoothing
         #label_df = df.loc[window_length:, 'error'].copy().reset_index(drop=True)
         
-        # with rolling window smoothing
-        rolling_window = 24
+        # Option 2: with rolling window smoothing
         label_df = df.loc[:, 'error'].copy().reset_index(drop=True).rolling(rolling_window).mean()
         label_df.loc[:rolling_window] = df.loc[:rolling_window, 'error']
         label_df = label_df.loc[window_length:].copy().reset_index(drop=True)
@@ -599,8 +601,30 @@ class PoseErrorData(BaseData):
     
     @staticmethod
     def modify_sequence_index(df, squence_name):
+        # The index is in the following format
+            # 1AAA0BB0CCCC
+            # Where, 
+            # AAA  is the trajectory number
+            # BB   is the run (iteration) number
+            # CCCC is the time step (image index) number
+        environment = squence_name.split('_')[-3]
+        environment_num = 0
+        if environment == "SenseTime":
+            environment_num = 1
+        elif environment == "LivingRoom":
+            environment_num = 2
+        elif environment == "Hall":
+            environment_num = 3
+        else:
+            print("incorrect environment")
+
+        # Sequence_num: 0~7
         sequence_num = int(squence_name.split('_')[-2][-1])
+        sequence_num = environment_num*100 + sequence_num
+        # Run_num: 1~10
         run_num = int(squence_name.split('_')[-1])
+        
+        # 1AAA0BB
         base_num = 1*10**11 + sequence_num*10**8 + run_num*10**5
         df.loc[:, 'start_image_index'] += base_num
         return df
@@ -612,7 +636,10 @@ class PoseErrorData(BaseData):
                      'brightness','entropy', 'num_images', 'min_corners', 'min_keypoints',\
                      'max_keypoints_diff', 'min_keypoint_dist','min_inliers',\
                      'localba_error', 'localba_visual_error', 'localba_inertial_error',\
-                     'acc_magnitude']
+                     'acc_magnitude', 'gyro_magnitude']
+        # keep_cols = ['start_image_index', 'error',\
+        #              'brightness','entropy', 'num_images', 'min_corners', \
+        #              'acc_magnitude', 'gyro_magnitude']        
         df = df[keep_cols]
 
         return df
